@@ -1,12 +1,37 @@
 #include "time.h"
 /*
- * ESP32-S3 AI CAM - OpenAI Interface v2.0.15
+ * ESP32-S3 AI CAM - OpenAI Interface v2.0.28
  * 
- * Reorganized interface for better image/audio pairing workflow
+ * EPS32S3 DEV Module
+ * Tools Tab in IDE
+ * USB CDC On Boot- Enabled
+ * Flash Size - 16MB(128Mb)
+ * Partition Scheme - 16M Flash (3MB APP/9.9MB FATFS)
+ * PSRAM - OPI PSRAM
+ *
+ * v2.0.28 - MULTI-IMAGE VISION ANALYSIS
+ * ======================================
+ * Added support for analyzing multiple images (up to 5) in a single OpenAI request
+ * 
+ * New Features:
+ * - Export queue now supports multiple images (1-5 images per analysis)
+ * - Sequential base64 encoding for memory efficiency
+ * - Updated UI with image count display and individual remove buttons
+ * - Enhanced prompts for multi-image context
+ * - Analysis packages now include all analyzed images
+ * - Increased max_tokens to 1000 for detailed multi-image responses
+ * 
+ * Previous features maintained:
  * - Audio playback bar at top right
- * - Save/Delete for new captures (before adding to resource lists)
- * - Return Test/Audio quadrants moved up for better visibility
- * - Image/Audio file lists at bottom as resource pools
+ * - Resource-based file selection with export queue
+ * - Image/Audio file lists with Save to PC and Delete controls
+ * - Fixed speaker playback speed by converting mono to stereo
+ * - Real-time progress tracking displayed in web interface
+ * - Auto-start video streaming on page load
+ * - Visual streaming indicator with "LIVE" badge
+ * - Audio player always visible
+ * - Automatic analysis package saving to /analysis/[timestamp]/
+ * - Export Package button downloads all analysis files to PC
  */
 
 #include "esp_camera.h"
@@ -20,11 +45,11 @@
 #include "ESP_I2S.h"
 #include "mbedtls/base64.h"
 
-const char* ssid = "OSxDesign_2.4GH";
-const char* password = "ixnaywifi";
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 // IMPORTANT: Replace with your actual OpenAI API key
-const char* OPENAI_API_KEY = "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";
+const char* OPENAI_API_KEY = "sk-YOUR_OPEN_AI_API_KET";  
 
 const char* OPENAI_WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions";
 const char* OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
@@ -91,7 +116,7 @@ WebServer server(80);
 #define I2S_DOUT 42
 #define I2S_SD_PIN 41
 #define SAMPLE_RATE 16000
-#define AMPLIFICATION 10
+#define AMPLIFICATION 15
 
 int imageCount = 0;
 int audioCount = 0;
@@ -100,36 +125,89 @@ bool streamingEnabled = true;
 volatile bool recordingInProgress = false;
 volatile bool ttsInProgress = false;
 
+// Progress tracking for OpenAI analysis
+volatile bool analysisInProgress = false;
+String analysisProgressStage = "";
+String analysisProgressDetail = "";
+int analysisProgressPercent = 0;
+
+// Store completed analysis results
+bool analysisResultReady = false;
+String analysisResultText = "";
+String analysisResultTTSFile = "";
+bool analysisResultSuccess = false;
+
+// Current analysis request
+String currentImagePath = "";
+String currentAudioPath = "";
+String currentAnalysisID = "";
+
 I2SClass i2s_mic;
 I2SClass i2s_spk;
 
 String base64EncodeFileOptimized(String filePath) {
+  Serial.println("=== Base64 Encoding ===");
   File file = SD_MMC.open(filePath, FILE_READ);
-  if (!file) return "";
+  if (!file) {
+    Serial.println("ERROR: Failed to open file");
+    return "";
+  }
+  
   size_t fileSize = file.size();
-  size_t outputLen = 0;
-  mbedtls_base64_encode(nullptr, 0, &outputLen, nullptr, fileSize);
-  uint8_t* output = (uint8_t*)ps_malloc(outputLen + 1);
-  if (!output) output = (uint8_t*)malloc(outputLen + 1);
-  if (!output) { file.close(); return ""; }
+  Serial.printf("File size: %d bytes\n", fileSize);
+  Serial.printf("Free heap before encoding: %d bytes\n", ESP.getFreeHeap());
+  
+  // Calculate output size (base64 is ~4/3 the input size)
+  size_t base64Size = ((fileSize + 2) / 3) * 4;
+  
   String result = "";
-  result.reserve(outputLen + 100);
+  result.reserve(base64Size + 100);
+  
+  // Process in chunks to avoid memory issues
+  const size_t chunkSize = 3000; // Must be multiple of 3 for clean base64 encoding
+  uint8_t* inputBuffer = (uint8_t*)malloc(chunkSize);
+  uint8_t* outputBuffer = (uint8_t*)malloc(chunkSize * 2); // Base64 needs ~33% more space
+  
+  if (!inputBuffer || !outputBuffer) {
+    Serial.println("ERROR: Buffer allocation failed");
+    if (inputBuffer) free(inputBuffer);
+    if (outputBuffer) free(outputBuffer);
+    file.close();
+    return "";
+  }
+  
   size_t totalRead = 0;
-  uint8_t buffer[3000];
-  uint8_t temp[4096];
   while (file.available()) {
-    size_t bytesRead = file.read(buffer, sizeof(buffer));
+    size_t bytesRead = file.read(inputBuffer, chunkSize);
     if (bytesRead > 0) {
       size_t outLen = 0;
-      if (mbedtls_base64_encode(temp, sizeof(temp), &outLen, buffer, bytesRead) == 0) {
-        result += String((char*)temp).substring(0, outLen);
+      int ret = mbedtls_base64_encode(outputBuffer, chunkSize * 2, &outLen, inputBuffer, bytesRead);
+      
+      if (ret == 0) {
+        // Append encoded chunk to result
+        for (size_t i = 0; i < outLen; i++) {
+          result += (char)outputBuffer[i];
+        }
+        totalRead += bytesRead;
+        
+        if (totalRead % 30000 == 0) {
+          Serial.printf("Encoded: %d bytes\n", totalRead);
+          yield();
+        }
+      } else {
+        Serial.printf("ERROR: Base64 encode failed at offset %d, ret=%d\n", totalRead, ret);
+        break;
       }
-      totalRead += bytesRead;
-      if (totalRead % 30000 == 0) yield();
     }
   }
+  
   file.close();
-  free(output);
+  free(inputBuffer);
+  free(outputBuffer);
+  
+  Serial.printf("Encoding complete: %d input bytes -> %d base64 chars\n", totalRead, result.length());
+  Serial.printf("Free heap after encoding: %d bytes\n", ESP.getFreeHeap());
+  
   return result;
 }
 
@@ -261,54 +339,140 @@ String transcribeAudioWithWhisper(String audioFilePath) {
   return transcription;
 }
 
-String analyzeImageWithGPT4Vision(String imageFilePath, String audioTranscription) {
-  Serial.println("\n=== GPT-4 Vision ===");
-  String imageBase64 = base64EncodeFileOptimized(imageFilePath);
-  if (imageBase64.length() == 0) return "Error: Base64 encoding failed";
+String analyzeImageWithGPT4Vision(String imageFilePaths, String audioTranscription) {
+  Serial.println("\n=== GPT-4 Vision (Multi-Image) ===");
+  
+  // Parse comma-separated image paths
+  String imagePaths[5];
+  int imageCount = 0;
+  int startPos = 0;
+  int commaPos = imageFilePaths.indexOf(',');
+  
+  while (commaPos != -1 && imageCount < 5) {
+    imagePaths[imageCount] = imageFilePaths.substring(startPos, commaPos);
+    imagePaths[imageCount].trim();
+    imageCount++;
+    startPos = commaPos + 1;
+    commaPos = imageFilePaths.indexOf(',', startPos);
+  }
+  // Get last path (or only path if no commas)
+  if (startPos < imageFilePaths.length() && imageCount < 5) {
+    imagePaths[imageCount] = imageFilePaths.substring(startPos);
+    imagePaths[imageCount].trim();
+    imageCount++;
+  }
+  
+  Serial.printf("Analyzing %d image(s)\n", imageCount);
+  Serial.printf("Free heap before processing: %d bytes\n", ESP.getFreeHeap());
+  
+  // Setup connection
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient https;
-  https.begin(client, OPENAI_CHAT_URL);
+  
+  if (!https.begin(client, OPENAI_CHAT_URL)) {
+    Serial.println("ERROR: HTTPS begin failed");
+    return "Error: Connection setup failed";
+  }
+  
   https.addHeader("Content-Type", "application/json");
   https.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
-  https.setTimeout(60000);
-  size_t docSize = imageBase64.length() + 4096;
-  DynamicJsonDocument* doc = new DynamicJsonDocument(docSize);
-  if (!doc) return "Error: JSON allocation failed";
-  (*doc)["model"] = "gpt-4o";
-  (*doc)["max_tokens"] = 500;
-  JsonArray messages = doc->createNestedArray("messages");
-  JsonObject userMsg = messages.createNestedObject();
-  userMsg["role"] = "user";
-  JsonArray content = userMsg.createNestedArray("content");
-  JsonObject textPart = content.createNestedObject();
-  textPart["type"] = "text";
-  String prompt = "Analyze this image concisely. ";
-  if (audioTranscription.length() > 0 && !audioTranscription.startsWith("Error")) {
-    prompt += "Audio: \"" + audioTranscription + "\". Consider both.";
+  https.setTimeout(90000);  // Increased timeout for multi-image
+  
+  // Build JSON manually for better memory control
+  String requestBody = "{\"model\":\"gpt-4o\",\"max_tokens\":1000,\"messages\":[{\"role\":\"user\",\"content\":[";
+  
+  // Add text prompt
+  requestBody += "{\"type\":\"text\",\"text\":\"";
+  if (imageCount > 1) {
+    requestBody += "Analyze these " + String(imageCount) + " images. ";
+  } else {
+    requestBody += "Analyze this image. ";
   }
-  textPart["text"] = prompt;
-  JsonObject imagePart = content.createNestedObject();
-  imagePart["type"] = "image_url";
-  JsonObject imageUrl = imagePart.createNestedObject("image_url");
-  imageUrl["url"] = "data:image/jpeg;base64," + imageBase64;
-  String requestBody;
-  serializeJson(*doc, requestBody);
-  delete doc;
+  if (audioTranscription.length() > 0 && !audioTranscription.startsWith("Error")) {
+    requestBody += "Audio: \\\"" + audioTranscription + "\\\". Consider both.";
+  }
+  requestBody += "\"},";
+  
+  // Process each image sequentially
+  for (int i = 0; i < imageCount; i++) {
+    Serial.printf("\nProcessing image %d/%d: %s\n", i+1, imageCount, imagePaths[i].c_str());
+    Serial.printf("Free heap before image %d: %d bytes\n", i+1, ESP.getFreeHeap());
+    
+    // Check memory before each image
+    if (ESP.getFreeHeap() < 40000) {
+      Serial.println("ERROR: Insufficient memory for next image");
+      https.end();
+      return "Error: Insufficient memory for image " + String(i+1);
+    }
+    
+    String imageBase64 = base64EncodeFileOptimized(imagePaths[i]);
+    if (imageBase64.length() == 0) {
+      Serial.println("ERROR: Base64 encoding failed for image " + String(i+1));
+      https.end();
+      return "Error: Base64 encoding failed for image " + String(i+1);
+    }
+    
+    Serial.printf("Image %d base64 length: %d chars\n", i+1, imageBase64.length());
+    
+    // Add image to JSON
+    requestBody += "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,";
+    requestBody += imageBase64;
+    requestBody += "\"}}";
+    
+    if (i < imageCount - 1) {
+      requestBody += ",";
+    }
+    
+    // Free base64 immediately
+    imageBase64 = "";
+    yield();  // Allow other operations
+    server.handleClient();  // Allow progress updates
+    
+    Serial.printf("Free heap after image %d: %d bytes\n", i+1, ESP.getFreeHeap());
+  }
+  
+  requestBody += "]}]}";
+  
+  Serial.printf("\nTotal request size: %d bytes\n", requestBody.length());
+  Serial.printf("Free heap before POST: %d bytes\n", ESP.getFreeHeap());
+  Serial.println("Sending POST to GPT-4 Vision...");
+  
   int httpCode = https.POST(requestBody);
-  requestBody = "";
+  requestBody = ""; // Free immediately
+  
+  Serial.printf("HTTP Response Code: %d\n", httpCode);
+  
   String analysis = "";
   if (httpCode == 200) {
     String response = https.getString();
-    DynamicJsonDocument responseDoc(4096);
-    if (deserializeJson(responseDoc, response) == DeserializationError::Ok) {
+    Serial.printf("Response length: %d bytes\n", response.length());
+    
+    DynamicJsonDocument responseDoc(6144);  // Increased for longer multi-image responses
+    DeserializationError error = deserializeJson(responseDoc, response);
+    
+    if (error == DeserializationError::Ok) {
       analysis = responseDoc["choices"][0]["message"]["content"].as<String>();
-      Serial.println("SUCCESS");
-    } else analysis = "Error: JSON parse failed";
-  } else analysis = "Error: GPT-4 returned " + String(httpCode);
+      Serial.println("SUCCESS: " + analysis);
+    } else {
+      Serial.println("ERROR: JSON parse failed - " + String(error.c_str()));
+      analysis = "Error: JSON parse failed";
+    }
+  } else if (httpCode > 0) {
+    String errorResponse = https.getString();
+    Serial.println("Server error: " + errorResponse);
+    analysis = "Error: GPT-4 returned " + String(httpCode);
+  } else {
+    Serial.println("ERROR: Connection failed");
+    analysis = "Error: Connection failed";
+  }
+  
   https.end();
+  Serial.printf("Free heap after Vision: %d bytes\n", ESP.getFreeHeap());
+  
   return analysis;
 }
+
 
 String generateTTSAudio(String text, String analysisID) {
   Serial.println("\n=== OpenAI TTS (Non-blocking) ===");
@@ -395,6 +559,10 @@ void setupCamera() {
     delay(1000);
     ESP.restart();
   }
+
+  sensor_t* s = esp_camera_sensor_get();
+  s->set_vflip(s, 0);
+  s->set_hmirror(s, 1);
 }
 
 const char index_html[] PROGMEM = R"rawliteral(
@@ -600,6 +768,10 @@ button:disabled {
 }
 
 .btn-stream { background: #3498db; }
+.btn-stream.active { 
+  background: #27ae60; 
+  animation: pulse 1.5s infinite;
+}
 .btn-capture { background: #667eea; }
 .btn-review { background: #9b59b6; }
 .btn-record { background: #e74c3c; }
@@ -611,6 +783,41 @@ button:disabled {
 
 .btn-record.recording {
   animation: pulse 1.5s infinite;
+}
+
+.streaming-indicator {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(39, 174, 96, 0.9);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: bold;
+  display: none;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.streaming-indicator.active {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.streaming-indicator::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: 50%;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 @keyframes pulse {
@@ -680,6 +887,7 @@ button:disabled {
       <button class="btn-review" onclick="reviewLastImage()">Review</button>
     </div>
     <div class="video-display">
+      <div id="streamingIndicator" class="streaming-indicator">LIVE</div>
       <img id="videoStream" src="">
     </div>
   </div>
@@ -687,12 +895,12 @@ button:disabled {
   <!-- Right Row 1: Audio Playback -->
   <div class="audio-section">
     <div class="audio-bar">Audio Playback Bar</div>
-    <audio id="audioPlayer" controls style="width:100%; margin-bottom:15px; display:none"></audio>
+    <audio id="audioPlayer" controls style="width:100%; margin-bottom:15px"></audio>
     <div id="recordingTimer" class="recording-timer" style="display:none">00:00</div>
     <div id="processingMsg" class="processing-msg" style="display:none">Recording audio, please wait...</div>
     <div class="video-controls">
       <button id="recordBtn" class="btn-record" onclick="toggleRecording()">Record</button>
-      <button id="playbackBtn" class="btn-playback" onclick="playbackAudio()" disabled>Playback</button>
+      <button id="playbackBtn" class="btn-playback" onclick="playbackAudio()" disabled>Speaker</button>
     </div>
   </div>
 
@@ -741,7 +949,7 @@ button:disabled {
     <div class="message-controls">
       <button class="btn-send" onclick="sendToOpenAI()">Send to OpenAI</button>
       <button class="btn-replay" onclick="replayTTSAudio()">Replay TTS</button>
-      <button class="btn-save" onclick="saveCompleteAnalysis()">Save Analysis</button>
+      <button class="btn-save" onclick="downloadAnalysisPackage()">Export Package</button>
     </div>
   </div>
 </div>
@@ -753,12 +961,13 @@ let streamActive = false;
 let streamInterval = null;
 let selectedImageFile = "";
 let selectedAudioFile = "";
-let selectedImageForExport = "";
+let selectedImagesForExport = [];  // Changed from single to array
 let selectedAudioForExport = "";
 let lastAnalysisResponse = "";
 let lastTTSAudioFile = "";
 let lastAnalysisID = "";
 let isRecording = false;
+const MAX_IMAGES_FOR_EXPORT = 5;  // Limit for memory safety
 
 function showStatus(message, isError = false) {
   const statusBar = document.getElementById('statusBar');
@@ -769,15 +978,24 @@ function showStatus(message, isError = false) {
 
 function toggleStream() {
   const videoStream = document.getElementById('videoStream');
+  const indicator = document.getElementById('streamingIndicator');
+  const streamBtn = document.querySelector('.btn-stream');
+  
   streamActive = !streamActive;
   
   if (streamActive) {
     videoStream.src = '/stream?' + Date.now();
     startStreamRefresh();
+    indicator.classList.add('active');
+    streamBtn.classList.add('active');
+    streamBtn.textContent = 'Stop Stream';
     showStatus('Stream started');
   } else {
     stopStreamRefresh();
     videoStream.src = '';
+    indicator.classList.remove('active');
+    streamBtn.classList.remove('active');
+    streamBtn.textContent = 'Video Stream';
     showStatus('Stream stopped');
   }
 }
@@ -804,6 +1022,7 @@ function captureImage() {
     .then(data => {
       if (data.success) {
         showStatus('Image captured: ' + data.filename);
+        selectedImageFile = data.filename;  // Auto-select the captured image
         loadImageList();
       } else {
         showStatus('Capture failed', true);
@@ -813,19 +1032,22 @@ function captureImage() {
 }
 
 function reviewLastImage() {
-  fetch('/image/latest')
-    .then(res => res.json())
-    .then(data => {
-      if (data.success && data.filename) {
-        stopStreamRefresh();
-        streamActive = false;
-        document.getElementById('videoStream').src = '/image?file=' + encodeURIComponent(data.filename);
-        showStatus('Reviewing: ' + data.filename);
-      } else {
-        showStatus('No images to review', true);
-      }
-    })
-    .catch(err => showStatus('Review failed', true));
+  if (!selectedImageFile) {
+    showStatus('No image selected to review', true);
+    return;
+  }
+  
+  stopStreamRefresh();
+  streamActive = false;
+  
+  const indicator = document.getElementById('streamingIndicator');
+  const streamBtn = document.querySelector('.btn-stream');
+  indicator.classList.remove('active');
+  streamBtn.classList.remove('active');
+  streamBtn.textContent = 'Video Stream';
+  
+  document.getElementById('videoStream').src = '/image?file=' + encodeURIComponent(selectedImageFile);
+  showStatus('Reviewing: ' + selectedImageFile);
 }
 
 function loadImageList() {
@@ -921,10 +1143,61 @@ function addSelectedImageToExport() {
     showStatus('No image selected', true);
     return;
   }
-  selectedImageForExport = selectedImageFile;
-  document.getElementById('exportedImageDisplay').textContent = selectedImageFile;
-  document.getElementById('exportedImageDisplay').style.color = '#333';
+  
+  // Check if already in export list
+  if (selectedImagesForExport.includes(selectedImageFile)) {
+    showStatus('Image already in export queue', true);
+    return;
+  }
+  
+  // Check max limit
+  if (selectedImagesForExport.length >= MAX_IMAGES_FOR_EXPORT) {
+    showStatus(`Maximum ${MAX_IMAGES_FOR_EXPORT} images allowed`, true);
+    return;
+  }
+  
+  selectedImagesForExport.push(selectedImageFile);
+  updateExportImageDisplay();
   showStatus('Added to export queue: ' + selectedImageFile);
+}
+
+function removeImageFromExport(filename) {
+  const index = selectedImagesForExport.indexOf(filename);
+  if (index > -1) {
+    selectedImagesForExport.splice(index, 1);
+    updateExportImageDisplay();
+    showStatus('Removed from export: ' + filename);
+  }
+}
+
+function clearAllExportImages() {
+  selectedImagesForExport = [];
+  updateExportImageDisplay();
+  showStatus('Cleared all images from export');
+}
+
+function updateExportImageDisplay() {
+  const display = document.getElementById('exportedImageDisplay');
+  
+  if (selectedImagesForExport.length === 0) {
+    display.innerHTML = '<span style="color:#999; font-size:13px">None selected</span>';
+  } else {
+    let html = '<div style="display:flex; flex-direction:column; gap:5px;">';
+    selectedImagesForExport.forEach((filename, index) => {
+      html += `<div style="display:flex; align-items:center; justify-content:space-between; padding:5px; background:#f0f0f0; border-radius:4px;">`;
+      html += `<span style="font-size:13px; color:#333;">${index + 1}. ${filename}</span>`;
+      html += `<button onclick="removeImageFromExport('${filename}')" style="background:#e74c3c; color:white; border:none; padding:3px 8px; border-radius:3px; cursor:pointer; font-size:11px;">Remove</button>`;
+      html += `</div>`;
+    });
+    html += '</div>';
+    html += `<div style="margin-top:8px; font-size:12px; color:#666;">Total: ${selectedImagesForExport.length} image(s)</div>`;
+    
+    if (selectedImagesForExport.length < MAX_IMAGES_FOR_EXPORT) {
+      html += `<button onclick="clearAllExportImages()" style="margin-top:5px; background:#e67e22; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer; font-size:12px; width:100%;">Clear All</button>`;
+    }
+    
+    display.innerHTML = html;
+  }
 }
 
 function addSelectedAudioToExport() {
@@ -1003,7 +1276,7 @@ function deleteSelectedAudioFile() {
         }
         
         selectedAudioFile = "";
-        document.getElementById('audioPlayer').style.display = 'none';
+        document.getElementById('audioPlayer').src = ''; // Clear source but keep visible
         document.getElementById('playbackBtn').disabled = true;
         document.getElementById('audioToExportBtn').disabled = true;
         document.getElementById('audioDownloadBtn').disabled = true;
@@ -1094,52 +1367,93 @@ function playbackAudio() {
 }
 
 function sendToOpenAI() {
-  if (!selectedImageForExport || !selectedAudioForExport) {
-    showStatus('Select image and audio for export first', true);
+  if (selectedImagesForExport.length === 0 || !selectedAudioForExport) {
+    showStatus('Select at least one image and audio for export first', true);
     return;
   }
   
   lastAnalysisID = Date.now().toString();
   stopStreamRefresh();
   
-  showStatus('Sending to OpenAI (60-90 sec) - Check serial monitor');
-  document.getElementById('messageDisplay').textContent = 
-    'Processing with OpenAI...\n\n' +
-    'Step 1: Transcribing audio...\n' +
-    'Step 2: Analyzing image...\n' +
-    'Step 3: Generating TTS...\n\n' +
-    'Check serial monitor for detailed progress.';
+  const imageCount = selectedImagesForExport.length;
+  showStatus(`Starting OpenAI analysis with ${imageCount} image(s)...`);
+  document.getElementById('messageDisplay').textContent = 'Initializing analysis...';
   
+  // Send request to start analysis
   fetch('/openai/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      image: selectedImageForExport,
+      images: selectedImagesForExport,  // Send array instead of single image
       audio: selectedAudioForExport,
       id: lastAnalysisID
-    }),
-    signal: AbortSignal.timeout(150000)
+    })
   })
     .then(res => res.json())
     .then(data => {
-      if (data.success) {
-        lastAnalysisResponse = data.response;
-        lastTTSAudioFile = data.ttsFile;
+      console.log('Analysis request response:', data);
+      
+      if (data.status === 'processing') {
+        console.log('Starting progress polling...');
         
-        const displayText = data.response.replace(/\\n/g, '\n');
-        document.getElementById('messageDisplay').textContent = displayText;
-        showStatus('Analysis complete!');
+        // Function to check progress
+        const checkProgress = () => {
+          fetch('/openai/progress')
+            .then(res => res.json())
+            .then(progress => {
+              console.log('Progress update:', progress);
+              
+              if (progress.resultReady) {
+                // Analysis complete - show results
+                clearInterval(progressInterval);
+                console.log('Analysis complete!');
+                
+                if (progress.success) {
+                  lastAnalysisResponse = progress.response;
+                  lastTTSAudioFile = progress.ttsFile;
+                  
+                  document.getElementById('messageDisplay').textContent = progress.response;
+                  showStatus('Analysis complete!');
+                } else {
+                  document.getElementById('messageDisplay').textContent = 
+                    'Analysis failed:\n\n' + progress.response;
+                  showStatus('Analysis failed', true);
+                }
+                
+                if (streamActive) startStreamRefresh();
+              } else if (progress.inProgress) {
+                // Still processing - show progress
+                const filledBlocks = Math.floor(progress.percent / 5);
+                const progressBar = '=' .repeat(filledBlocks) + 
+                                   '>' +
+                                   '-'.repeat(Math.max(0, 19 - filledBlocks));
+                document.getElementById('messageDisplay').textContent = 
+                  `${progress.stage} - ${progress.percent}%\n[${progressBar}]\n\n${progress.detail}\n\n` +
+                  `This process takes 60-90 seconds total.\nPlease wait...`;
+                showStatus(`${progress.stage} - ${progress.percent}%`);
+              }
+            })
+            .catch(err => {
+              console.error('Progress check error:', err);
+              clearInterval(progressInterval);
+              showStatus('Progress check failed', true);
+              if (streamActive) startStreamRefresh();
+            });
+        };
         
-        if (streamActive) startStreamRefresh();
+        // Check immediately, then every 1.5 seconds
+        checkProgress();
+        const progressInterval = setInterval(checkProgress, 1500);
       } else {
-        showStatus('OpenAI request failed', true);
+        console.error('Analysis start failed:', data);
+        showStatus('Failed to start analysis', true);
         document.getElementById('messageDisplay').textContent = 'Error: ' + (data.error || 'Unknown error');
         if (streamActive) startStreamRefresh();
       }
     })
     .catch(err => {
-      showStatus('Timeout - check serial monitor', true);
-      document.getElementById('messageDisplay').textContent = 'Timeout - check serial monitor for details';
+      showStatus('Request failed', true);
+      document.getElementById('messageDisplay').textContent = 'Request failed. Check serial monitor for details.';
       if (streamActive) startStreamRefresh();
     });
 }
@@ -1158,39 +1472,30 @@ function replayTTSAudio() {
   showStatus('Playing TTS response');
 }
 
-function saveCompleteAnalysis() {
-  if (!lastAnalysisResponse || !lastTTSAudioFile || !selectedAudioForExport) {
-    showStatus('Complete analysis first', true);
+function downloadAnalysisPackage() {
+  if (!lastAnalysisID) {
+    showStatus('Complete an analysis first', true);
     return;
   }
   
-  showStatus('Preparing download...');
-  fetch('/analysis/download', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text: lastAnalysisResponse,
-      image: selectedImageForExport,
-      audioQuestion: selectedAudioForExport,
-      audioTTS: lastTTSAudioFile,
-      id: lastAnalysisID
-    })
-  })
-    .then(res => res.json())
-    .then(data => {
-      if (data.success) {
-        window.location.href = '/analysis/package?id=' + lastAnalysisID;
-        showStatus('Download started');
-      } else {
-        showStatus('Save failed', true);
-      }
-    })
-    .catch(err => showStatus('Save error', true));
+  showStatus('Preparing package download...');
+  
+  // Download the entire analysis folder as a zip
+  window.location.href = '/analysis/export?id=' + lastAnalysisID;
+  
+  setTimeout(() => {
+    showStatus('Package downloaded');
+  }, 1000);
 }
 
 // Initialize
 loadImageList();
 loadAudioList();
+
+// Auto-start streaming
+setTimeout(() => {
+  toggleStream();
+}, 500);
 </script>
 </body>
 </html>
@@ -1200,7 +1505,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n\n========================================");
-  Serial.println("ESP32-S3 - OpenAI Interface v2.0.15");
+  Serial.println("ESP32-S3 - OpenAI Interface v2.0.28");
   Serial.println("========================================\n");
   
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
@@ -1254,17 +1559,86 @@ void setup() {
   server.on("/delete/image", HTTP_DELETE, handleDeleteImage);
   server.on("/delete/audio", HTTP_DELETE, handleDeleteAudio);
   server.on("/openai/analyze", HTTP_POST, handleOpenAIAnalyze);
+  server.on("/openai/progress", HTTP_GET, handleOpenAIProgress);
   server.on("/analysis/download", HTTP_POST, handleAnalysisDownload);
   server.on("/analysis/package", HTTP_GET, handleAnalysisPackage);
+  server.on("/analysis/export", HTTP_GET, handleAnalysisExport);
+  server.on("/analysis/file", HTTP_GET, handleAnalysisFile);
   
   server.begin();
   
   Serial.println("\n========================================");
-  Serial.println("SYSTEM READY - Interface v2.0.15");
+  Serial.println("SYSTEM READY - Interface v2.0.28");
   Serial.println("Optimized pairing workflow");
   String apiKeyStatus = (String(OPENAI_API_KEY) == "sk-YOUR-OPENAI-API-KEY-HERE") ? "NOT SET!" : "Configured";
   Serial.println("API Key status: " + apiKeyStatus);
   Serial.println("========================================\n");
+  
+  // Initialize file counters based on existing files
+  initializeFileCounters();
+}
+
+void initializeFileCounters() {
+  // Count existing images and set imageCount to highest number
+  File root = SD_MMC.open("/images");
+  if (root) {
+    File file = root.openNextFile();
+    while (file) {
+      if (!file.isDirectory()) {
+        String filename = String(file.name());
+        // Extract number from IMG_X.jpg format
+        if (filename.startsWith("IMG_") && filename.endsWith(".jpg")) {
+          int underscorePos = filename.indexOf('_');
+          int dotPos = filename.indexOf('.');
+          if (underscorePos > 0 && dotPos > underscorePos) {
+            String numStr = filename.substring(underscorePos + 1, dotPos);
+            int num = numStr.toInt();
+            if (num > imageCount) imageCount = num;
+          }
+        }
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+  }
+  
+  // Count existing audio and set audioCount to highest number
+  root = SD_MMC.open("/audio");
+  if (root) {
+    File file = root.openNextFile();
+    while (file) {
+      if (!file.isDirectory()) {
+        String filename = String(file.name());
+        // Extract number from REC_X.wav format
+        if (filename.startsWith("REC_") && filename.endsWith(".wav")) {
+          int underscorePos = filename.indexOf('_');
+          int dotPos = filename.indexOf('.');
+          if (underscorePos > 0 && dotPos > underscorePos) {
+            String numStr = filename.substring(underscorePos + 1, dotPos);
+            int num = numStr.toInt();
+            if (num > audioCount) audioCount = num;
+          }
+        }
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+  }
+  
+  // Count existing TTS and set ttsCount to highest number
+  root = SD_MMC.open("/tts");
+  if (root) {
+    File file = root.openNextFile();
+    while (file) {
+      if (!file.isDirectory()) {
+        ttsCount++;
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+  }
+  
+  Serial.printf("Initialized counters - Images: %d, Audio: %d, TTS: %d\n", imageCount, audioCount, ttsCount);
 }
 
 void handleStream() {
@@ -1305,10 +1679,23 @@ void handleImageView() {
 
 void handleLatestImage() {
   File root = SD_MMC.open("/images");
-  String latest = "";
-  while (File file = root.openNextFile()) {
-    if (!file.isDirectory()) latest = String(file.name());
+  if (!root) {
+    server.send(200, "application/json", "{\"success\":false}");
+    return;
   }
+  
+  String latest = "";
+  File file = root.openNextFile();
+  
+  while (file) {
+    if (!file.isDirectory()) {
+      latest = String(file.name());
+    }
+    file = root.openNextFile();
+  }
+  
+  root.close();
+  
   if (latest.length() > 0) {
     server.send(200, "application/json", "{\"success\":true,\"filename\":\"" + latest + "\"}");
   } else {
@@ -1408,12 +1795,28 @@ void handleSpeakerPlayback() {
     return;
   }
   
+  // Skip WAV header (44 bytes)
   file.seek(44);
-  uint8_t buffer[512];
+  
+  // Buffer for reading mono samples and writing stereo
+  uint8_t monoBuffer[256];  // Read 128 samples at a time
+  uint8_t stereoBuffer[512]; // Write 128 stereo samples (256 mono samples duplicated)
+  
   while (file.available()) {
-    size_t bytesRead = file.read(buffer, sizeof(buffer));
+    size_t bytesRead = file.read(monoBuffer, sizeof(monoBuffer));
     if (bytesRead > 0) {
-      i2s_spk.write(buffer, bytesRead);
+      // Convert mono to stereo by duplicating each 16-bit sample
+      int16_t* monoSamples = (int16_t*)monoBuffer;
+      int16_t* stereoSamples = (int16_t*)stereoBuffer;
+      size_t numSamples = bytesRead / 2; // Number of 16-bit mono samples
+      
+      for (size_t i = 0; i < numSamples; i++) {
+        stereoSamples[i * 2] = monoSamples[i];      // Left channel
+        stereoSamples[i * 2 + 1] = monoSamples[i];  // Right channel (duplicate)
+      }
+      
+      // Write stereo data (twice the size of mono)
+      i2s_spk.write(stereoBuffer, numSamples * 4);
     }
     yield();
   }
@@ -1481,27 +1884,303 @@ void handleDeleteAudio() {
   }
 }
 
+// Background task that runs the actual OpenAI analysis
+void runOpenAIAnalysis() {
+  analysisResultReady = false;
+  analysisResultSuccess = false;
+  
+  Serial.println("\n========================================");
+  Serial.println("OpenAI Analysis Request");
+  Serial.println("========================================");
+  Serial.println("Image: " + currentImagePath);
+  Serial.println("Audio: " + currentAudioPath);
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  
+  analysisProgressStage = "Validation";
+  analysisProgressDetail = "Checking files...";
+  analysisProgressPercent = 5;
+  server.handleClient(); // Allow progress requests
+  yield();
+  
+  if (!SD_MMC.exists(currentImagePath) || !SD_MMC.exists(currentAudioPath)) {
+    Serial.println("ERROR: File not found");
+    analysisInProgress = false;
+    analysisProgressStage = "Error";
+    analysisProgressDetail = "File not found";
+    analysisResultText = "Error: File not found";
+    analysisResultSuccess = false;
+    analysisResultReady = true;
+    return;
+  }
+  
+  // Step 1: Whisper transcription
+  analysisProgressStage = "Whisper";
+  analysisProgressDetail = "Transcribing audio (30-40 sec)...";
+  analysisProgressPercent = 10;
+  server.handleClient(); // Allow progress requests
+  yield();
+  
+  String transcription = transcribeAudioWithWhisper(currentAudioPath);
+  if (transcription.startsWith("Error")) {
+    Serial.println("ERROR: Whisper failed - " + transcription);
+    analysisInProgress = false;
+    analysisProgressStage = "Error";
+    analysisProgressDetail = "Whisper failed";
+    analysisResultText = transcription;
+    analysisResultSuccess = false;
+    analysisResultReady = true;
+    return;
+  }
+  Serial.printf("Free heap after Whisper: %d bytes\n", ESP.getFreeHeap());
+  
+  // Step 2: Vision analysis
+  analysisProgressStage = "Vision";
+  analysisProgressDetail = "Analyzing images with GPT-4 (may take longer for multiple images)...";
+  analysisProgressPercent = 45;
+  server.handleClient(); // Allow progress requests
+  yield();
+  
+  String analysis = analyzeImageWithGPT4Vision(currentImagePath, transcription);
+  if (analysis.startsWith("Error")) {
+    Serial.println("ERROR: Vision failed - " + analysis);
+    analysisInProgress = false;
+    analysisProgressStage = "Error";
+    analysisProgressDetail = "Vision failed";
+    analysisResultText = analysis;
+    analysisResultSuccess = false;
+    analysisResultReady = true;
+    return;
+  }
+  Serial.printf("Free heap after Vision: %d bytes\n", ESP.getFreeHeap());
+  
+  // Step 3: TTS generation
+  analysisProgressStage = "TTS";
+  analysisProgressDetail = "Generating speech audio (20-30 sec)...";
+  analysisProgressPercent = 75;
+  server.handleClient(); // Allow progress requests
+  yield();
+  
+  String combinedText = "Audio Transcription: " + transcription + ". Image Analysis: " + analysis;
+  String ttsFile = generateTTSAudio(combinedText, currentAnalysisID);
+  Serial.printf("Free heap after TTS: %d bytes\n", ESP.getFreeHeap());
+  
+  if (ttsFile.length() == 0) ttsFile = "none";
+  
+  // Finalize
+  analysisProgressStage = "Complete";
+  analysisProgressDetail = "Analysis finished successfully";
+  analysisProgressPercent = 100;
+  
+  String result = "=== AUDIO TRANSCRIPTION ===\n" + transcription + "\n\n=== IMAGE ANALYSIS ===\n" + analysis;
+  
+  analysisResultText = result;
+  analysisResultTTSFile = ttsFile;
+  analysisResultSuccess = true;
+  analysisResultReady = true;
+  
+  Serial.println("\n=== Analysis Complete ===");
+  Serial.println("TTS File: " + ttsFile);
+  
+  // Auto-save complete analysis package to SD card
+  saveAnalysisPackage(currentAnalysisID, transcription, analysis, currentImagePath, currentAudioPath, ttsFile);
+  
+  analysisInProgress = false;
+}
+
+void saveAnalysisPackage(String analysisID, String transcription, String analysis, String imagePaths, String audioPath, String ttsFile) {
+  Serial.println("\n=== Saving Analysis Package ===");
+  
+  // Create analysis directory
+  String analysisDir = "/analysis/" + analysisID;
+  SD_MMC.mkdir("/analysis");
+  SD_MMC.mkdir(analysisDir.c_str());
+  
+  Serial.println("Directory: " + analysisDir);
+  
+  // Parse image paths (comma-separated)
+  String imagePathArray[5];
+  int imageCount = 0;
+  int startPos = 0;
+  int commaPos = imagePaths.indexOf(',');
+  
+  while (commaPos != -1 && imageCount < 5) {
+    imagePathArray[imageCount] = imagePaths.substring(startPos, commaPos);
+    imagePathArray[imageCount].trim();
+    imageCount++;
+    startPos = commaPos + 1;
+    commaPos = imagePaths.indexOf(',', startPos);
+  }
+  if (startPos < imagePaths.length() && imageCount < 5) {
+    imagePathArray[imageCount] = imagePaths.substring(startPos);
+    imagePathArray[imageCount].trim();
+    imageCount++;
+  }
+  
+  Serial.printf("Saving analysis with %d image(s)\n", imageCount);
+  
+  // 1. Save prompt (audio transcription)
+  File promptFile = SD_MMC.open(analysisDir + "/prompt.txt", FILE_WRITE);
+  if (promptFile) {
+    promptFile.println("Audio Transcription");
+    promptFile.println("==================");
+    promptFile.println(transcription);
+    promptFile.close();
+    Serial.println("Saved: prompt.txt");
+  }
+  
+  // 2. Save response (image analysis)
+  File responseFile = SD_MMC.open(analysisDir + "/response.txt", FILE_WRITE);
+  if (responseFile) {
+    responseFile.println("Image Analysis");
+    responseFile.println("==============");
+    responseFile.println(analysis);
+    responseFile.close();
+    Serial.println("Saved: response.txt");
+  }
+  
+  // 3. Save combined analysis
+  File combinedFile = SD_MMC.open(analysisDir + "/combined.txt", FILE_WRITE);
+  if (combinedFile) {
+    combinedFile.println("OpenAI Analysis Results");
+    combinedFile.println("======================");
+    combinedFile.println("Timestamp: " + analysisID);
+    combinedFile.println("Images (" + String(imageCount) + "): " + imagePaths);
+    combinedFile.println("Audio: " + audioPath);
+    combinedFile.println("");
+    combinedFile.println("=== AUDIO TRANSCRIPTION ===");
+    combinedFile.println(transcription);
+    combinedFile.println("");
+    combinedFile.println("=== IMAGE ANALYSIS ===");
+    combinedFile.println(analysis);
+    combinedFile.close();
+    Serial.println("Saved: combined.txt");
+  }
+  
+  // 4. Save metadata
+  File metaFile = SD_MMC.open(analysisDir + "/metadata.txt", FILE_WRITE);
+  if (metaFile) {
+    metaFile.println("Analysis Metadata");
+    metaFile.println("=================");
+    metaFile.println("Analysis ID: " + analysisID);
+    metaFile.println("Timestamp: " + analysisID);
+    metaFile.println("Image Count: " + String(imageCount));
+    metaFile.println("Source Images: " + imagePaths);
+    metaFile.println("Source Audio: " + audioPath);
+    metaFile.println("TTS File: /tts/" + ttsFile);
+    metaFile.println("Prompt Length: " + String(transcription.length()) + " chars");
+    metaFile.println("Response Length: " + String(analysis.length()) + " chars");
+    metaFile.close();
+    Serial.println("Saved: metadata.txt");
+  }
+  
+  // 5. Copy all analyzed images to analysis folder
+  for (int i = 0; i < imageCount; i++) {
+    File srcImg = SD_MMC.open(imagePathArray[i], FILE_READ);
+    String dstFilename = analysisDir + "/image_" + String(i + 1) + ".jpg";
+    File dstImg = SD_MMC.open(dstFilename, FILE_WRITE);
+    
+    if (srcImg && dstImg) {
+      uint8_t buffer[512];
+      while (srcImg.available()) {
+        size_t bytesRead = srcImg.read(buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+          dstImg.write(buffer, bytesRead);
+        }
+      }
+      srcImg.close();
+      dstImg.close();
+      Serial.println("Saved: image_" + String(i + 1) + ".jpg (copied from " + imagePathArray[i] + ")");
+    }
+    yield();
+  }
+  
+  // 6. Copy TTS file to analysis folder (if it exists)
+  if (ttsFile != "none" && ttsFile.length() > 0) {
+    File srcTTS = SD_MMC.open("/tts/" + ttsFile, FILE_READ);
+    File dstTTS = SD_MMC.open(analysisDir + "/audio.mp3", FILE_WRITE);
+    if (srcTTS && dstTTS) {
+      uint8_t buffer[512];
+      while (srcTTS.available()) {
+        size_t bytesRead = srcTTS.read(buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+          dstTTS.write(buffer, bytesRead);
+        }
+      }
+      srcTTS.close();
+      dstTTS.close();
+      Serial.println("Saved: audio.mp3 (copied from /tts/" + ttsFile + ")");
+    }
+  }
+  
+  Serial.println("=== Package Saved Successfully ===");
+  Serial.printf("Location: %s\n", analysisDir.c_str());
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+}
+
 void handleOpenAIAnalyze() {
-  String body = server.arg("plain");
-  DynamicJsonDocument doc(1024);
-  deserializeJson(doc, body);
+  // Check if already processing
+  if (analysisInProgress) {
+    server.send(503, "application/json", "{\"success\":false,\"error\":\"Analysis already in progress\"}");
+    return;
+  }
   
-  String imageFile = doc["image"].as<String>();
-  String audioFile = doc["audio"].as<String>();
-  String analysisID = doc["id"].as<String>();
+  DynamicJsonDocument reqDoc(2048);  // Increased for image array
+  deserializeJson(reqDoc, server.arg("plain"));
   
-  String transcription = transcribeAudioWithWhisper("/audio/" + audioFile);
-  String analysis = analyzeImageWithGPT4Vision("/images/" + imageFile, transcription);
-  String ttsFile = generateTTSAudio(analysis, analysisID);
+  // Get image array from request
+  JsonArray imagesArray = reqDoc["images"].as<JsonArray>();
+  String audioFile = reqDoc["audio"].as<String>();
+  currentAnalysisID = reqDoc["id"].as<String>();
   
-  DynamicJsonDocument response(4096);
-  response["success"] = true;
-  response["response"] = analysis;
-  response["ttsFile"] = ttsFile.length() > 0 ? ttsFile : "none";
+  // Build image paths array (max 5)
+  currentImagePath = "";  // Will store comma-separated list for metadata
+  int imageCount = 0;
+  for (JsonVariant imageVar : imagesArray) {
+    if (imageCount >= 5) break;  // Safety limit
+    String imageFile = imageVar.as<String>();
+    if (imageCount > 0) currentImagePath += ",";
+    currentImagePath += "/images/" + imageFile;
+    imageCount++;
+  }
   
-  String responseStr;
-  serializeJson(response, responseStr);
-  server.send(200, "application/json", responseStr);
+  currentAudioPath = "/audio/" + audioFile;
+  
+  Serial.printf("Multi-image analysis: %d images\n", imageCount);
+  
+  // Initialize progress tracking
+  analysisInProgress = true;
+  analysisResultReady = false;
+  analysisProgressStage = "Starting";
+  analysisProgressDetail = "Initializing analysis...";
+  analysisProgressPercent = 0;
+  
+  // Respond immediately to allow polling
+  server.send(202, "application/json", "{\"success\":true,\"status\":\"processing\"}");
+  
+  // Small delay to ensure response is sent
+  delay(100);
+  
+  // Run analysis in "background" (it blocks but browser is already free to poll)
+  runOpenAIAnalysis();
+}
+
+void handleOpenAIProgress() {
+  DynamicJsonDocument doc(8192);
+  doc["inProgress"] = analysisInProgress;
+  doc["stage"] = analysisProgressStage;
+  doc["detail"] = analysisProgressDetail;
+  doc["percent"] = analysisProgressPercent;
+  doc["resultReady"] = analysisResultReady;
+  
+  if (analysisResultReady) {
+    doc["success"] = analysisResultSuccess;
+    doc["response"] = analysisResultText;
+    doc["ttsFile"] = analysisResultTTSFile;
+  }
+  
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
 }
 
 void handleAnalysisDownload() {
@@ -1533,6 +2212,108 @@ void handleAnalysisPackage() {
     file.close();
   } else {
     server.send(404);
+  }
+}
+
+void handleAnalysisExport() {
+  String id = server.arg("id");
+  String analysisDir = "/analysis/" + id;
+  
+  Serial.println("\n=== Exporting Analysis Package ===");
+  Serial.println("Analysis ID: " + id);
+  Serial.println("Directory: " + analysisDir);
+  
+  // Check if directory exists
+  File dir = SD_MMC.open(analysisDir);
+  if (!dir || !dir.isDirectory()) {
+    Serial.println("ERROR: Analysis directory not found");
+    server.send(404, "text/plain", "Analysis not found");
+    return;
+  }
+  
+  // Create an HTML page that provides download links for all files
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta charset='UTF-8'>";
+  html += "<title>Analysis Package " + id + "</title>";
+  html += "<style>";
+  html += "body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }";
+  html += "h1 { color: #2c3e50; }";
+  html += ".file-list { list-style: none; padding: 0; }";
+  html += ".file-item { background: #ecf0f1; margin: 10px 0; padding: 15px; border-radius: 5px; }";
+  html += ".file-item a { color: #3498db; text-decoration: none; font-weight: bold; font-size: 16px; }";
+  html += ".file-item a:hover { text-decoration: underline; }";
+  html += ".file-size { color: #7f8c8d; font-size: 14px; margin-left: 10px; }";
+  html += ".download-all { background: #27ae60; color: white; padding: 12px 24px; ";
+  html += "border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin: 20px 0; }";
+  html += ".download-all:hover { background: #229954; }";
+  html += "</style></head><body>";
+  html += "<h1>Analysis Package</h1>";
+  html += "<p><strong>Analysis ID:</strong> " + id + "</p>";
+  html += "<p><strong>Location:</strong> " + analysisDir + "</p>";
+  html += "<button class='download-all' onclick='downloadAll()'>Download All Files</button>";
+  html += "<ul class='file-list'>";
+  
+  // List all files in directory
+  File file = dir.openNextFile();
+  int fileCount = 0;
+  String fileList = "";
+  
+  while (file) {
+    if (!file.isDirectory()) {
+      String filename = String(file.name());
+      size_t filesize = file.size();
+      fileCount++;
+      
+      html += "<li class='file-item'>";
+      html += "<a href='/analysis/file?id=" + id + "&file=" + filename + "' download='" + filename + "'>";
+      html += filename + "</a>";
+      html += "<span class='file-size'>(" + String(filesize) + " bytes)</span>";
+      html += "</li>";
+      
+      fileList += "'" + filename + "',";
+    }
+    file = dir.openNextFile();
+  }
+  dir.close();
+  
+  html += "</ul>";
+  html += "<p>Total files: " + String(fileCount) + "</p>";
+  
+  // Add JavaScript for download all
+  html += "<script>";
+  html += "function downloadAll() {";
+  html += "  const files = [" + fileList + "];";
+  html += "  files.forEach((file, index) => {";
+  html += "    setTimeout(() => {";
+  html += "      const a = document.createElement('a');";
+  html += "      a.href = '/analysis/file?id=" + id + "&file=' + file;";
+  html += "      a.download = file;";
+  html += "      document.body.appendChild(a);";
+  html += "      a.click();";
+  html += "      document.body.removeChild(a);";
+  html += "    }, index * 500);";
+  html += "  });";
+  html += "}";
+  html += "</script>";
+  html += "</body></html>";
+  
+  server.send(200, "text/html", html);
+  Serial.println("=== Export Page Sent ===");
+}
+
+void handleAnalysisFile() {
+  String id = server.arg("id");
+  String filename = server.arg("file");
+  String filepath = "/analysis/" + id + "/" + filename;
+  
+  Serial.println("Downloading: " + filepath);
+  
+  File file = SD_MMC.open(filepath, FILE_READ);
+  if (file) {
+    server.streamFile(file, "application/octet-stream");
+    file.close();
+  } else {
+    server.send(404, "text/plain", "File not found");
   }
 }
 
