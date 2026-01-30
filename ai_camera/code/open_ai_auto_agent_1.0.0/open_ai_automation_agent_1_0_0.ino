@@ -53,11 +53,11 @@
 #include "ESP_I2S.h"
 #include "mbedtls/base64.h"
 
-const char* ssid = "OSxDesign_2.4GH";
-const char* password = "ixnaywifi";
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 // IMPORTANT: Replace with your actual OpenAI API key
-const char* OPENAI_API_KEY = "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";
+const char* OPENAI_API_KEY = "sk-";
 
 const char* OPENAI_WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions";
 const char* OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
