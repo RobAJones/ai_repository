@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Camera - Flash Firmware</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #00d4ff;
+            --primary-dark: #0099cc;
+            --bg: #0a0e1a;
+            --card: #141824;
+            --text: #e8eaed;
+            --dim: #9aa0a6;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(0, 212, 255, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(52, 211, 153, 0.06) 0%, transparent 50%);
+        }
+        .container { max-width: 640px; width: 100%; }
+        .header { text-align: center; margin-bottom: 48px; }
+        .logo {
+            width: 80px; height: 80px; margin: 0 auto 24px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 20px; display: flex; align-items: center;
+            justify-content: center; font-size: 40px;
+        }
+        h1 {
+            font-size: 2.4rem; font-weight: 700; margin-bottom: 12px;
+            background: linear-gradient(135deg, var(--primary), #34d399);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .subtitle { color: var(--dim); font-size: 1.1rem; line-height: 1.6; }
+        .card {
+            background: var(--card); border-radius: 20px; padding: 32px;
+            margin-bottom: 24px; border: 1px solid var(--border);
+        }
+        .card h2 { font-size: 1.3rem; margin-bottom: 16px; font-weight: 600; }
+        .steps { list-style: none; counter-reset: step; }
+        .steps li {
+            counter-increment: step;
+            padding: 16px 16px 16px 56px;
+            position: relative; margin-bottom: 8px;
+            background: rgba(255,255,255,0.03); border-radius: 12px;
+            line-height: 1.6; font-size: 1.05rem;
+        }
+        .steps li::before {
+            content: counter(step);
+            position: absolute; left: 16px; top: 16px;
+            width: 28px; height: 28px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 50%; display: flex; align-items: center;
+            justify-content: center; font-weight: 700; font-size: 0.85rem;
+            color: var(--bg);
+        }
+        .flash-section {
+            text-align: center; padding: 48px 32px;
+            background: var(--card); border-radius: 20px;
+            border: 2px solid var(--border); margin-bottom: 24px;
+        }
+        .flash-section p { color: var(--dim); margin-bottom: 24px; font-size: 1.05rem; }
+        esp-web-install-button {
+            display: inline-block;
+        }
+        esp-web-install-button button {
+            font-family: 'Outfit', sans-serif;
+            padding: 18px 48px;
+            font-size: 1.2rem; font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white; border: none; border-radius: 14px;
+            cursor: pointer; transition: all 0.3s ease;
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        esp-web-install-button button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 30px rgba(0, 212, 255, 0.4);
+        }
+        .requirements {
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 12px; padding: 20px; margin-top: 24px;
+        }
+        .requirements h3 { color: #fbbf24; font-size: 1rem; margin-bottom: 8px; }
+        .requirements ul { list-style: disc; padding-left: 20px; color: var(--dim); line-height: 1.8; }
+        .after-flash { margin-top: 32px; }
+        .after-flash h2 { color: #34d399; }
+        .footer { text-align: center; color: var(--dim); font-size: 0.85rem; margin-top: 48px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">📷</div>
+            <h1>AI Camera</h1>
+            <p class="subtitle">Flash the firmware to your ESP32-S3 AI CAM directly from your browser. No software to install.</p>
+        </div>
+
+        <div class="flash-section">
+            <p>Plug in your ESP32-S3 via USB-C, then click the button below.</p>
+            <esp-web-install-button manifest="manifest.json">
+                <button slot="activate">Flash Firmware</button>
+                <span slot="unsupported">
+                    Your browser doesn't support Web Serial.<br>
+                    Use <strong>Chrome</strong> or <strong>Edge</strong> on desktop.
+                </span>
+                <span slot="not-allowed">
+                    Web Serial is not allowed in this context.<br>
+                    Make sure you're accessing this page over HTTPS.
+                </span>
+            </esp-web-install-button>
+
+            <div class="requirements">
+                <h3>Requirements</h3>
+                <ul>
+                    <li>Chrome or Edge browser (desktop only)</li>
+                    <li>USB-C data cable (not charge-only)</li>
+                    <li>ESP32-S3 AI CAM (DFRobot DFR1154)</li>
+                    <li>Micro SD card inserted in the board</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card after-flash">
+            <h2>After Flashing</h2>
+            <ol class="steps">
+                <li>The camera will create a WiFi network called <strong>AI-Camera-Setup</strong></li>
+                <li>Connect to it from your phone or laptop (no password)</li>
+                <li>A setup page will open automatically. Pick your WiFi network and enter your password.</li>
+                <li>Paste your OpenAI API key (get one at <a href="https://platform.openai.com/api-keys" target="_blank" style="color: var(--primary);">platform.openai.com/api-keys</a>)</li>
+                <li>Click <strong>Connect & Start Camera</strong>. The camera will reboot and you're done!</li>
+                <li>Open the IP address shown in the setup page to use the camera interface.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h2>Troubleshooting</h2>
+            <ol class="steps">
+                <li><strong>No device detected?</strong> Try a different USB cable. Some cables are charge-only and can't transfer data.</li>
+                <li><strong>Flash failed?</strong> Hold the BOOT button on the board while clicking Flash, then release after it starts.</li>
+                <li><strong>Need to start over?</strong> Hold the BOOT button for 3 seconds to factory reset and re-enter setup.</li>
+            </ol>
+        </div>
+
+        <div class="footer">
+            <p>AI Camera Firmware v3.0.0</p>
+        </div>
+    </div>
+</body>
+</html>
