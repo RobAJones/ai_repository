@@ -1649,6 +1649,18 @@ void handleWPS() {
 // ============================================================
 void setupApplicationServer() {
   Serial.println("\n=== Starting Camera Application ===");
+
+  // Enable CORS for browser-based student apps
+  server.enableCORS(true);
+
+  // Handle preflight OPTIONS requests for POST endpoints
+  server.on("/openai/analyze", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(204);
+  });
+
   server.on("/", HTTP_GET, []() { server.send_P(200, "text/html", index_html); });
   server.on("/stream", HTTP_GET, handleStream);
   server.on("/capture", HTTP_GET, handleCapture);
