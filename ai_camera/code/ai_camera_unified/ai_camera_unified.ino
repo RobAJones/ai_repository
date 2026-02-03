@@ -41,6 +41,12 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include "esp_wps.h"
+#include <ESPmDNS.h>
+
+// ============================================================
+// mDNS Configuration
+// ============================================================
+#define MDNS_NAME "ai-camera"  // Access at http://ai-camera.local
 
 // ============================================================
 // OpenAI API URLs
@@ -635,6 +641,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 </head>
 <body>
 <div id="statusBar" class="status-bar"></div>
+<div id="connectionBanner" class="info-banner" style="max-width:1400px;margin:0 auto 20px;background:#d4edda;border-left-color:#28a745;">
+  <strong>Connection Info:</strong> <span id="connectionInfo">Loading...</span>
+</div>
 <div class="main-grid">
   <div class="video-section">
     <div class="info-banner"><strong>Pairing Workflow:</strong> Capture image/audio → Save to export → Send to OpenAI agent</div>
@@ -758,6 +767,16 @@ function downloadAnalysisPackage() { if (!lastAnalysisID) { showStatus('Complete
 loadImageList();
 loadAudioList();
 setTimeout(() => { toggleStream(); }, 500);
+
+// Fetch and display device connection info
+fetch('/device-info').then(res => res.json()).then(info => {
+  const connInfo = document.getElementById('connectionInfo');
+  connInfo.innerHTML = 'IP: <strong>' + info.ip + '</strong> | ' +
+    'Bookmark: <a href="http://' + info.mdns + '" style="color:#155724;font-weight:bold;">http://' + info.mdns + '</a> | ' +
+    'Signal: ' + info.rssi + ' dBm';
+}).catch(() => {
+  document.getElementById('connectionInfo').textContent = 'Could not load device info';
+});
 </script>
 </body>
 </html>
@@ -1649,6 +1668,18 @@ void setupApplicationServer() {
   server.on("/analysis/package", HTTP_GET, handleAnalysisPackage);
   server.on("/analysis/export", HTTP_GET, handleAnalysisExport);
   server.on("/analysis/file", HTTP_GET, handleAnalysisFile);
+
+  // Device info endpoint for mDNS and IP display
+  server.on("/device-info", HTTP_GET, []() {
+    String json = "{";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"mdns\":\"" + String(MDNS_NAME) + ".local\",";
+    json += "\"mac\":\"" + WiFi.macAddress() + "\",";
+    json += "\"rssi\":" + String(WiFi.RSSI());
+    json += "}";
+    server.send(200, "application/json", json);
+  });
+
   server.begin();
   Serial.println("Camera server started at http://" + WiFi.localIP().toString());
 }
@@ -1752,8 +1783,19 @@ void setup() {
       Serial.println("API Key: " + apiKeyStatus);
       setupApplicationServer();
       initializeFileCounters();
+
+      // Start mDNS responder
+      if (MDNS.begin(MDNS_NAME)) {
+        MDNS.addService("http", "tcp", 80);
+        Serial.println("mDNS started: http://" + String(MDNS_NAME) + ".local");
+      } else {
+        Serial.println("mDNS failed to start");
+      }
+
       Serial.println("\n========================================");
       Serial.println("SYSTEM READY - Camera Mode");
+      Serial.println("IP Address: " + WiFi.localIP().toString());
+      Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
       Serial.println("========================================\n");
     } else {
       startConfigMode();
