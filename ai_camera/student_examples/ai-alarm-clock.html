@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Alarm Clock - Student Project</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 10px; font-size: 2.5rem; }
+        .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
+
+        .card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .card h2 { margin-bottom: 16px; font-size: 1.2rem; color: #ffd93d; }
+
+        .clock-display {
+            font-size: 5rem;
+            font-weight: 200;
+            text-align: center;
+            font-family: 'SF Mono', Monaco, monospace;
+            letter-spacing: -2px;
+            margin: 20px 0;
+        }
+        .date-display {
+            text-align: center;
+            color: #888;
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+        }
+
+        .config-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        .config-row label {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            flex: 1;
+            min-width: 200px;
+        }
+        .config-row label span { font-size: 0.85rem; color: #888; }
+        input, select {
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 1rem;
+        }
+        input:focus { outline: 2px solid #ffd93d; }
+
+        button {
+            padding: 14px 28px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover { transform: translateY(-2px); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .btn-primary { background: #ffd93d; color: #1a1a2e; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-success { background: #2ecc71; color: white; }
+        .btn-secondary { background: rgba(255,255,255,0.2); color: white; }
+
+        .alarm-status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-weight: 600;
+        }
+        .alarm-status.set { background: rgba(46, 204, 113, 0.2); color: #2ecc71; }
+        .alarm-status.ringing { background: rgba(231, 76, 60, 0.3); color: #e74c3c; animation: pulse 0.5s infinite; }
+        .alarm-status.off { background: rgba(255,255,255,0.1); color: #888; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .snapshot-area {
+            background: #000;
+            border-radius: 12px;
+            aspect-ratio: 4/3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .snapshot-area img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .snapshot-area .placeholder {
+            color: #444;
+            font-size: 1.2rem;
+        }
+
+        .ai-response {
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 15px;
+            min-height: 100px;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
+
+        .log {
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            color: #0f0;
+        }
+        .log .error { color: #e74c3c; }
+        .log .info { color: #3498db; }
+        .log .success { color: #2ecc71; }
+
+        .button-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+        .connection-status.connected { background: rgba(46, 204, 113, 0.2); color: #2ecc71; }
+        .connection-status.disconnected { background: rgba(231, 76, 60, 0.2); color: #e74c3c; }
+        .connection-status::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .instructions {
+            background: rgba(255, 217, 61, 0.1);
+            border-left: 4px solid #ffd93d;
+            padding: 15px;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 20px;
+        }
+        .instructions h3 { color: #ffd93d; margin-bottom: 10px; }
+        .instructions ol { padding-left: 20px; }
+        .instructions li { margin-bottom: 8px; color: #ccc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Alarm Clock</h1>
+        <p class="subtitle">A student project using the AI Camera API</p>
+
+        <div class="instructions">
+            <h3>How to Use</h3>
+            <ol>
+                <li>Enter your AI Camera's IP address (find it on the camera's web interface)</li>
+                <li>Click "Test Connection" to make sure it works</li>
+                <li>Set your alarm time and click "Set Alarm"</li>
+                <li>When the alarm goes off, it will take your photo, listen for your voice, and give you a personalized wake-up message!</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h2>Camera Connection</h2>
+            <div class="config-row">
+                <label>
+                    <span>Camera IP Address</span>
+                    <input type="text" id="cameraIP" value="ai-camera.local" placeholder="192.168.0.61 or ai-camera.local">
+                </label>
+                <div style="display: flex; align-items: flex-end;">
+                    <button class="btn-secondary" onclick="testConnection()">Test Connection</button>
+                </div>
+            </div>
+            <div id="connectionStatus" class="connection-status disconnected">Not connected</div>
+        </div>
+
+        <div class="card">
+            <h2>Current Time</h2>
+            <div class="clock-display" id="clock">00:00:00</div>
+            <div class="date-display" id="date">Loading...</div>
+        </div>
+
+        <div class="card">
+            <h2>Alarm Settings</h2>
+            <div class="config-row">
+                <label>
+                    <span>Alarm Time</span>
+                    <input type="time" id="alarmTime" value="07:00">
+                </label>
+                <label>
+                    <span>Your Name (for personalized greeting)</span>
+                    <input type="text" id="userName" placeholder="Enter your name" value="Student">
+                </label>
+            </div>
+            <div class="button-row">
+                <button class="btn-primary" onclick="setAlarm()">Set Alarm</button>
+                <button class="btn-danger" onclick="cancelAlarm()">Cancel Alarm</button>
+                <button class="btn-success" onclick="testWakeUp()">Test Wake-Up (Now)</button>
+            </div>
+            <div id="alarmStatus" class="alarm-status off">No alarm set</div>
+        </div>
+
+        <div class="card">
+            <h2>Wake-Up Snapshot</h2>
+            <div class="snapshot-area">
+                <img id="snapshot" style="display: none;">
+                <span class="placeholder" id="snapshotPlaceholder">Snapshot will appear here when alarm triggers</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>AI Response</h2>
+            <div class="ai-response" id="aiResponse">Waiting for alarm to trigger...</div>
+            <div class="button-row" style="margin-top: 15px;">
+                <button class="btn-secondary" onclick="replayResponse()" id="replayBtn" disabled>Replay Audio Response</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Activity Log</h2>
+            <div class="log" id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // CONFIGURATION
+        // ============================================================
+        const getCameraURL = () => {
+            const ip = document.getElementById('cameraIP').value.trim();
+            // Add http:// if not present
+            if (!ip.startsWith('http://') && !ip.startsWith('https://')) {
+                return `http://${ip}`;
+            }
+            return ip;
+        };
+
+        let alarm = null;  // { hours, minutes }
+        let isConnected = false;
+        let lastTTSFile = null;
+
+        // ============================================================
+        // LOGGING
+        // ============================================================
+        function log(message, type = 'info') {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const className = type;
+            logEl.innerHTML = `<div class="${className}">[${time}] ${message}</div>` + logEl.innerHTML;
+            console.log(`[${type}] ${message}`);
+        }
+
+        // ============================================================
+        // CLOCK & DATE DISPLAY
+        // ============================================================
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent = now.toLocaleTimeString();
+            document.getElementById('date').textContent = now.toLocaleDateString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+            });
+
+            // Check alarm
+            if (alarm && now.getHours() === alarm.hours && now.getMinutes() === alarm.minutes && now.getSeconds() === 0) {
+                triggerAlarm();
+            }
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // ============================================================
+        // CONNECTION TEST
+        // ============================================================
+        async function testConnection() {
+            log('Testing connection to ' + getCameraURL() + '...');
+            const statusEl = document.getElementById('connectionStatus');
+
+            try {
+                const response = await fetch(`${getCameraURL()}/device-info`, {
+                    signal: AbortSignal.timeout(5000)
+                });
+                const data = await response.json();
+
+                isConnected = true;
+                statusEl.className = 'connection-status connected';
+                statusEl.textContent = `Connected - IP: ${data.ip} | Signal: ${data.rssi} dBm`;
+                log(`Connected! Camera IP: ${data.ip}, MAC: ${data.mac}`, 'success');
+            } catch (err) {
+                isConnected = false;
+                statusEl.className = 'connection-status disconnected';
+                statusEl.textContent = 'Connection failed - check IP address';
+                log(`Connection failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ============================================================
+        // ALARM FUNCTIONS
+        // ============================================================
+        function setAlarm() {
+            const timeInput = document.getElementById('alarmTime').value;
+            if (!timeInput) {
+                log('Please set an alarm time', 'error');
+                return;
+            }
+
+            const [hours, minutes] = timeInput.split(':').map(Number);
+            alarm = { hours, minutes };
+
+            const statusEl = document.getElementById('alarmStatus');
+            statusEl.className = 'alarm-status set';
+            statusEl.textContent = `Alarm set for ${timeInput}`;
+            log(`Alarm set for ${timeInput}`, 'success');
+        }
+
+        function cancelAlarm() {
+            alarm = null;
+            const statusEl = document.getElementById('alarmStatus');
+            statusEl.className = 'alarm-status off';
+            statusEl.textContent = 'No alarm set';
+            log('Alarm cancelled');
+        }
+
+        function triggerAlarm() {
+            log('ALARM TRIGGERED!', 'error');
+            const statusEl = document.getElementById('alarmStatus');
+            statusEl.className = 'alarm-status ringing';
+            statusEl.textContent = 'WAKE UP!';
+
+            // Start the wake-up sequence
+            wakeUpSequence();
+
+            // Clear the alarm so it doesn't repeat
+            alarm = null;
+        }
+
+        // ============================================================
+        // WAKE-UP SEQUENCE (The main AI interaction)
+        // ============================================================
+        async function wakeUpSequence() {
+            const userName = document.getElementById('userName').value || 'friend';
+            document.getElementById('aiResponse').textContent = 'Starting wake-up sequence...';
+
+            try {
+                // Step 1: Capture an image
+                log('Step 1: Capturing image...', 'info');
+                const captureRes = await fetch(`${getCameraURL()}/capture`);
+                const captureData = await captureRes.json();
+
+                if (captureData.success) {
+                    log(`Image captured: ${captureData.filename}`, 'success');
+
+                    // Show the snapshot
+                    const img = document.getElementById('snapshot');
+                    img.src = `${getCameraURL()}/image/latest?t=${Date.now()}`;
+                    img.style.display = 'block';
+                    document.getElementById('snapshotPlaceholder').style.display = 'none';
+                } else {
+                    throw new Error('Failed to capture image');
+                }
+
+                // Step 2: Record audio (listen for response)
+                log('Step 2: Recording audio for 5 seconds...', 'info');
+                document.getElementById('aiResponse').textContent = 'Listening for your voice...';
+
+                const audioRes = await fetch(`${getCameraURL()}/audio/record?duration=5`, {
+                    signal: AbortSignal.timeout(15000)
+                });
+                const audioData = await audioRes.json();
+
+                if (audioData.success) {
+                    log(`Audio recorded: ${audioData.filename}`, 'success');
+                } else {
+                    log('Audio recording failed, continuing anyway...', 'error');
+                }
+
+                // Step 3: Send to OpenAI for analysis
+                log('Step 3: Sending to AI for analysis...', 'info');
+                document.getElementById('aiResponse').textContent = 'Analyzing with AI... (this takes about 60 seconds)';
+
+                const analyzeRes = await fetch(`${getCameraURL()}/openai/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        images: [captureData.filename],
+                        audio: audioData.filename || '',
+                        customPrompt: `You are a friendly, encouraging AI alarm clock assistant named "Rise".
+                        The user's name is "${userName}".
+
+                        Look at the image - can you see if they're awake? Describe what you see briefly.
+
+                        If they said something in the audio, respond to it conversationally.
+
+                        Give them an upbeat, personalized morning greeting. You can:
+                        - Comment on what you see (are they still in bed? already up?)
+                        - Motivate them to start their day
+                        - Maybe tell a quick joke or fun fact
+                        - Mention it's a great day to learn something new
+
+                        Keep your response to 2-3 sentences. Be warm and encouraging!`
+                    })
+                });
+
+                const analyzeData = await analyzeRes.json();
+
+                if (analyzeData.status === 'processing') {
+                    // Poll for progress
+                    log('AI is processing...', 'info');
+                    await pollProgress();
+                } else {
+                    throw new Error(analyzeData.error || 'Analysis failed');
+                }
+
+            } catch (err) {
+                log(`Wake-up sequence error: ${err.message}`, 'error');
+                document.getElementById('aiResponse').textContent = `Error: ${err.message}\n\nMake sure the camera is connected and try again.`;
+            }
+
+            // Reset alarm status
+            const statusEl = document.getElementById('alarmStatus');
+            statusEl.className = 'alarm-status off';
+            statusEl.textContent = 'Alarm complete - set a new one!';
+        }
+
+        async function pollProgress() {
+            return new Promise((resolve, reject) => {
+                const checkProgress = async () => {
+                    try {
+                        const res = await fetch(`${getCameraURL()}/openai/progress`);
+                        const progress = await res.json();
+
+                        if (progress.resultReady) {
+                            clearInterval(interval);
+
+                            if (progress.success) {
+                                document.getElementById('aiResponse').textContent = progress.response;
+                                lastTTSFile = progress.ttsFile;
+                                document.getElementById('replayBtn').disabled = !lastTTSFile || lastTTSFile === 'none';
+                                log('AI response received!', 'success');
+                            } else {
+                                document.getElementById('aiResponse').textContent = 'AI Error: ' + progress.response;
+                                log('AI analysis failed', 'error');
+                            }
+                            resolve();
+                        } else if (progress.inProgress) {
+                            document.getElementById('aiResponse').textContent =
+                                `${progress.stage}\n\nProgress: ${progress.percent}%\n\n${progress.detail || 'Please wait...'}`;
+                            log(`Progress: ${progress.percent}% - ${progress.stage}`, 'info');
+                        }
+                    } catch (err) {
+                        // Keep trying
+                    }
+                };
+
+                const interval = setInterval(checkProgress, 2000);
+                checkProgress(); // Initial check
+
+                // Timeout after 2 minutes
+                setTimeout(() => {
+                    clearInterval(interval);
+                    reject(new Error('AI analysis timeout'));
+                }, 120000);
+            });
+        }
+
+        // ============================================================
+        // REPLAY AUDIO RESPONSE
+        // ============================================================
+        async function replayResponse() {
+            if (!lastTTSFile) {
+                log('No audio response to replay', 'error');
+                return;
+            }
+            log('Playing audio response on camera speaker...', 'info');
+            try {
+                const res = await fetch(`${getCameraURL()}/audio/speaker?file=${encodeURIComponent(lastTTSFile)}`);
+                const data = await res.json();
+                if (data.success) {
+                    log('Audio playback complete', 'success');
+                } else {
+                    log('Playback failed', 'error');
+                }
+            } catch (err) {
+                log(`Playback error: ${err.message}`, 'error');
+            }
+        }
+
+        // ============================================================
+        // TEST BUTTON - Run wake-up sequence immediately
+        // ============================================================
+        function testWakeUp() {
+            if (!isConnected) {
+                log('Please test connection first!', 'error');
+                return;
+            }
+            log('Testing wake-up sequence...', 'info');
+            const statusEl = document.getElementById('alarmStatus');
+            statusEl.className = 'alarm-status ringing';
+            statusEl.textContent = 'Testing wake-up...';
+            wakeUpSequence();
+        }
+
+        // ============================================================
+        // INITIAL SETUP
+        // ============================================================
+        log('AI Alarm Clock loaded. Enter your camera IP and click "Test Connection" to begin.', 'info');
+    </script>
+</body>
+</html>
