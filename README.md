@@ -205,9 +205,9 @@ For CIJE educators and collaborators — the [Quick Start Guide](docs/quick_star
 
 ## Credits
 
-- **Robert Jones** — Firmware architecture and development
-- **Bob Jones** — Engineering Consultant, former CIJE mentor
+- **Robert Jones** — Firmware architecture and developmentEngineer, former CIJE mentor
 - **Orly Nader** — Director of Innovation, CIJE
+- **Aryeh Laufer** — AI Process Consultant
 - **DFRobot** — DFR1154 hardware platform
 
 ---
