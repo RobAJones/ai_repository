@@ -174,6 +174,9 @@ The Automation Agent version also accepts serial commands from an Arduino UNO fo
 
 ```
 ai_repository/
+├── cad/
+│   ├── stl/
+│   └── step/
 ├── firmware/
 │   ├── standalone/          # v3.x line — standalone camera + OpenAI app
 │   ├── automation_agent/    # v1.2.x line — Arduino UNO serial automation
